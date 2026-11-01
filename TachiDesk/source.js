@@ -4025,12 +4025,10 @@ class TachiDesk {
         const page = metadata?.page ?? 1;
         const serverURL = await (0, Common_1.getServerURL)(this.stateManager);
         const searchTerm = (query.title && query.title !== "") ? query.title : null;
-        const tiles = [];
-        for (const source of selectedSources) {
-            if (page !== 1) {
-                if (!meta_sources[source])
-                    continue;
-            }
+        // Search every selected source at once; results are merged in source order below
+        const searches = selectedSources
+            .filter((source) => page === 1 || meta_sources[source])
+            .map(async (source) => {
             try {
                 const result = await (0, Common_1.graphqlRequest)(this.stateManager, this.requestManager, GQL_SEARCH_SOURCE, {
                     sourceId: source,
@@ -4039,22 +4037,28 @@ class TachiDesk {
                 });
                 const fetchResult = result.data?.fetchSourceManga;
                 if (!fetchResult) {
-                    continue;
+                    return { source, fetchResult: undefined };
                 }
-                for (const manga of fetchResult.mangas) {
-                    tiles.push(App.createPartialSourceManga({
-                        title: manga.title,
-                        mangaId: String(manga.id),
-                        image: manga.thumbnailUrl ? serverURL + manga.thumbnailUrl.replace(/^\//, "") : "",
-                        subtitle: (0, Common_1.getSourceNameFromId)(serverSources, source)
-                    }));
-                }
-                meta_sources[source] = fetchResult.hasNextPage;
+                return { source, fetchResult };
             }
             catch (e) {
                 console.log(`Search error for source ${source}: ${e}`);
-                continue;
+                return { source, fetchResult: undefined };
             }
+        });
+        const tiles = [];
+        for (const { source, fetchResult } of await Promise.all(searches)) {
+            if (!fetchResult)
+                continue;
+            for (const manga of fetchResult.mangas) {
+                tiles.push(App.createPartialSourceManga({
+                    title: manga.title,
+                    mangaId: String(manga.id),
+                    image: manga.thumbnailUrl ? serverURL + manga.thumbnailUrl.replace(/^\//, "") : "",
+                    subtitle: (0, Common_1.getSourceNameFromId)(serverSources, source)
+                }));
+            }
+            meta_sources[source] = fetchResult.hasNextPage;
         }
         metadata = tiles.length !== 0 ? { page: page + 1, sources: meta_sources } : undefined;
         return App.createPagedResults({
