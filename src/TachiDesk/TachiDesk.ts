@@ -253,7 +253,7 @@ const GQL_UPDATE_CHAPTER_READ = `
 export class TachiDesk implements PaperbackExtensionBase, MangaProgressProviding {
     stateManager = App.createSourceStateManager();
     requestManager = App.createRequestManager({
-        requestsPerSecond: 4,
+        requestsPerSecond: 12,
         requestTimeout: 20000,
         interceptor: {
             interceptRequest: async (request: Request) => {
