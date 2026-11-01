@@ -3649,7 +3649,7 @@ class TachiDesk {
     constructor() {
         this.stateManager = App.createSourceStateManager();
         this.requestManager = App.createRequestManager({
-            requestsPerSecond: 4,
+            requestsPerSecond: 12,
             requestTimeout: 20000,
             interceptor: {
                 interceptRequest: async (request) => {
