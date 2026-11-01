@@ -688,39 +688,43 @@ export class TachiDesk implements PaperbackExtensionBase, MangaProgressProviding
 
         const searchTerm = (query.title && query.title !== "") ? query.title : null;
 
+        // Search every selected source at once; results are merged in source order below
+        const searches = selectedSources
+            .filter((source) => page === 1 || meta_sources[source])
+            .map(async (source) => {
+                try {
+                    const result = await graphqlRequest(this.stateManager, this.requestManager, GQL_SEARCH_SOURCE, {
+                        sourceId: source,
+                        query: searchTerm,
+                        page
+                    });
+
+                    const fetchResult = result.data?.fetchSourceManga;
+                    if (!fetchResult) {
+                        return { source, fetchResult: undefined };
+                    }
+                    return { source, fetchResult };
+                } catch (e) {
+                    console.log(`Search error for source ${source}: ${e}`);
+                    return { source, fetchResult: undefined };
+                }
+            });
+
         const tiles = []
-        for (const source of selectedSources) {
-            if (page !== 1) {
-                if (!meta_sources[source]) continue
+        for (const { source, fetchResult } of await Promise.all(searches)) {
+            if (!fetchResult) continue;
+
+            for (const manga of fetchResult.mangas) {
+                tiles.push(
+                    App.createPartialSourceManga({
+                        title: manga.title,
+                        mangaId: String(manga.id),
+                        image: manga.thumbnailUrl ? serverURL + manga.thumbnailUrl.replace(/^\//, "") : "",
+                        subtitle: getSourceNameFromId(serverSources, source)
+                    })
+                )
             }
-
-            try {
-                const result = await graphqlRequest(this.stateManager, this.requestManager, GQL_SEARCH_SOURCE, {
-                    sourceId: source,
-                    query: searchTerm,
-                    page
-                });
-
-                const fetchResult = result.data?.fetchSourceManga;
-                if (!fetchResult) {
-                    continue;
-                }
-
-                for (const manga of fetchResult.mangas) {
-                    tiles.push(
-                        App.createPartialSourceManga({
-                            title: manga.title,
-                            mangaId: String(manga.id),
-                            image: manga.thumbnailUrl ? serverURL + manga.thumbnailUrl.replace(/^\//, "") : "",
-                            subtitle: getSourceNameFromId(serverSources, source)
-                        })
-                    )
-                }
-                meta_sources[source] = fetchResult.hasNextPage;
-            } catch (e) {
-                console.log(`Search error for source ${source}: ${e}`);
-                continue;
-            }
+            meta_sources[source] = fetchResult.hasNextPage;
         }
 
         metadata = tiles.length !== 0 ? { page: page + 1, sources: meta_sources } : undefined
