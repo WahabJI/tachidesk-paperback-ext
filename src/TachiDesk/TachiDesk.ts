@@ -250,28 +250,40 @@ const GQL_UPDATE_CHAPTER_READ = `
     }
 `;
 
+// Per-source cap for search requests, in milliseconds
+const SEARCH_SOURCE_TIMEOUT_MS = 8000;
+
 export class TachiDesk implements PaperbackExtensionBase, MangaProgressProviding {
     stateManager = App.createSourceStateManager();
+    requestInterceptor = {
+        interceptRequest: async (request: Request) => {
+            const authEnabled = await getAuthState(this.stateManager);
+
+            if (authEnabled) {
+                request.headers = {
+                    ...request.headers,
+                    authorization: await getAuthString(this.stateManager)
+                }
+            }
+
+            return request
+        },
+        interceptResponse: async (response: Response): Promise<Response> => {
+            return response
+        }
+    }
+
     requestManager = App.createRequestManager({
         requestsPerSecond: 12,
         requestTimeout: 20000,
-        interceptor: {
-            interceptRequest: async (request: Request) => {
-                const authEnabled = await getAuthState(this.stateManager);
+        interceptor: this.requestInterceptor
+    })
 
-                if (authEnabled) {
-                    request.headers = {
-                        ...request.headers,
-                        authorization: await getAuthString(this.stateManager)
-                    }
-                }
-
-                return request
-            },
-            interceptResponse: async (response: Response): Promise<Response> => {
-                return response
-            }
-        }
+    // Search uses a shorter timeout so one slow or blocked source cannot stall the whole search
+    searchRequestManager = App.createRequestManager({
+        requestsPerSecond: 12,
+        requestTimeout: SEARCH_SOURCE_TIMEOUT_MS,
+        interceptor: this.requestInterceptor
     })
 
     serverAddress = ""
@@ -344,9 +356,14 @@ export class TachiDesk implements PaperbackExtensionBase, MangaProgressProviding
         });
         const manga = mangaResult.data.manga;
 
-        // If last fetched more than a day ago, fetch online
+        let chaptersResult = await graphqlRequest(this.stateManager, this.requestManager, GQL_GET_CHAPTERS, {
+            mangaId: mangaIdInt
+        });
+
+        // Fetch online if last fetched more than a day ago, or if we have no chapters yet
         const lastFetched = parseInt(manga.lastFetchedAt ?? "0");
-        if (lastFetched < Math.floor(Date.now() / 1000) - 86400) {
+        const stale = lastFetched < Math.floor(Date.now() / 1000) - 86400;
+        if (stale || chaptersResult.data.chapters.nodes.length === 0) {
             try {
                 await graphqlRequest(this.stateManager, this.requestManager, GQL_GET_MANGA_ONLINE_FETCH, {
                     id: mangaIdInt
@@ -354,14 +371,18 @@ export class TachiDesk implements PaperbackExtensionBase, MangaProgressProviding
                 await graphqlRequest(this.stateManager, this.requestManager, GQL_FETCH_CHAPTERS, {
                     mangaId: mangaIdInt
                 });
+                chaptersResult = await graphqlRequest(this.stateManager, this.requestManager, GQL_GET_CHAPTERS, {
+                    mangaId: mangaIdInt
+                });
             } catch (e) {
                 console.log(`Error during online fetch: ${e}`);
+                // Nothing stored and the source failed: say why instead of showing an empty list
+                if (chaptersResult.data.chapters.nodes.length === 0) {
+                    const reason = String(e).replace(/\\r|\\n|\r|\n/g, " ").slice(0, 160);
+                    throw new Error(`Could not load chapters from the source: ${reason}`);
+                }
             }
         }
-
-        const chaptersResult = await graphqlRequest(this.stateManager, this.requestManager, GQL_GET_CHAPTERS, {
-            mangaId: mangaIdInt
-        });
 
         this.serverAddress = await getServerURL(this.stateManager);
 
@@ -693,7 +714,7 @@ export class TachiDesk implements PaperbackExtensionBase, MangaProgressProviding
             .filter((source) => page === 1 || meta_sources[source])
             .map(async (source) => {
                 try {
-                    const result = await graphqlRequest(this.stateManager, this.requestManager, GQL_SEARCH_SOURCE, {
+                    const result = await graphqlRequest(this.stateManager, this.searchRequestManager, GQL_SEARCH_SOURCE, {
                         sourceId: source,
                         query: searchTerm,
                         page
